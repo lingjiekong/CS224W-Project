@@ -835,18 +835,19 @@ min_loss = 1e10*np.ones(runs)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 dataset = GraphPropPredDataset(name=datasetname)
+len_dataset = len(dataset)
 
 num_edge = 0
 num_node = 0
-num_graph = len(dataset)
+num_graph = len_dataset
 graph, label = dataset[0]
 num_node_features = len(graph['node_feat'][0])
-num_classes = 2
-
 
 dataset1 = list()
-for i in range(len(dataset)):
+labels = dict()
+for i in range(len_dataset):
     graph, label = dataset[i]
+    labels[label[0]] = labels.get(label[0], 0) + 1
     data1 = Data(x=torch.tensor(graph['node_feat'], dtype=torch.float),
                  edge_index=torch.tensor(graph['edge_index']),
                  y=torch.tensor(label))
@@ -856,10 +857,12 @@ for i in range(len(dataset)):
     num_edge = num_edge + data1.num_edge
     dataset1.append(data1)
 dataset = dataset1
+num_classes = len(labels)
 
-print(len(dataset))
-print(num_classes)
-print(num_node_features)
+print("[PAN]: label {}".format(labels))
+print("[PAN]: size of dataset {}".format(len_dataset))
+print("[PAN]: number of classes {}".format(num_classes))
+print("[PAN]: number of node feature {}".format(num_node_features))
 
 num_edge = num_edge*1.0/num_graph
 num_node = num_node*1.0/num_graph
