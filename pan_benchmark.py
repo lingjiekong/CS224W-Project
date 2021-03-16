@@ -767,7 +767,7 @@ def test(model,loader,device):
         one_hot_label = torch.nn.functional.one_hot(label)
         # print(torch.sigmoid(out))
         # print(one_hot_label)
-        roc_auc_score(one_hot_label.to("cpu"), torch.exp(out).to("cpu"))
+        score = roc_auc_score(one_hot_label.to("cpu"), torch.exp(out).to("cpu"))
         loss += F.nll_loss(out, data.y).item()*data.num_graphs
 
     return score, loss/len(loader.dataset)
