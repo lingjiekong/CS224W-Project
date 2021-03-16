@@ -29,7 +29,7 @@ from optparse import OptionParser
 import time
 # add ogb data loader
 from ogb.graphproppred import GraphPropPredDataset
-from sklearn.metrics import *
+from sklearn.metrics import roc_auc_score
 
 #import gdown
 #import zipfile
@@ -754,21 +754,23 @@ def train(model,train_loader,device):
     return loss_all / len(train_loader.dataset)
 
 
-def test(model,loader,device):
+def test(model,loader,device, num_classes):
     model.eval()
     score = 0
     loss = 0.0
-
+    one_hot_arr = np.empty((0, 2))
+    out_arr = np.empty((0, 2))
     for data in loader:
-      with torch.no_grad():
-        data = data.to(device)
-        out, _ = model(data)
-        label = data.y
-        one_hot_label = torch.nn.functional.one_hot(label)
-        # print(torch.sigmoid(out))
-        # print(one_hot_label)
-        score = roc_auc_score(one_hot_label.to("cpu"), torch.exp(out).to("cpu"))
-        loss += F.nll_loss(out, data.y).item()*data.num_graphs
+        with torch.no_grad():
+            data = data.to(device)
+            out, _ = model(data)
+            label = data.y
+            one_hot_label = torch.nn.functional.one_hot(label, num_classes)
+            one_hot_arr = np.append(one_hot_arr, one_hot_label.to("cpu").detach().numpy(), axis=0)
+            out_arr = np.append(out_arr, torch.exp(out).to("cpu").detach().numpy(), axis=0)
+
+            loss += F.nll_loss(out, data.y).item() * data.num_graphs
+    score = roc_auc_score(one_hot_arr, out_arr)
 
     return score, loss/len(loader.dataset)
 
@@ -793,7 +795,7 @@ parser.add_option("--runs",
                   dest="runs", default=1, type=np.int,
                   help="number of runs")
 parser.add_option("--batch_size", type=np.int,
-                  dest="batch_size", default=320,
+                  dest="batch_size", default=32,
                   help="batch size")
 parser.add_option("--L",
                   dest="L", default=4, type=np.int,
@@ -881,9 +883,9 @@ for run in range(runs):
 
     training_set, test_set = random_split(dataset, [num_training,num_test])
     # resolve data bias
+    no_bias_training_set = []
     if is_no_bias_training == 1:
         print('use no bias training')
-        no_bias_training_set = []
         for ts in training_set:
             if ts.y.item() == 1:
                 for _ in range(20):
@@ -953,10 +955,10 @@ for run in range(runs):
         train_loss[run,epoch] = loss
 
         # train
-        train_a, train_l = test(model,train_loader,device)
+        train_a, train_l = test(model,train_loader,device,num_classes)
 
         # validation
-        val_acc_1, val_loss_1 = test(model,val_loader,device)
+        val_acc_1, val_loss_1 = test(model,val_loader,device,num_classes)
         val_loss[run,epoch] = val_loss_1
         val_acc[run,epoch] = val_acc_1
         # print('Val Run: {:02d}, Epoch: {:03d}, Val loss: {:.4f}, Val acc: {:.4f}'.format(run+1,epoch+1,val_loss[run,epoch],val_acc[run,epoch]))
@@ -974,7 +976,7 @@ for run in range(runs):
 
     # test
     model.load_state_dict(torch.load('latest.pth'))
-    test_acc[run], _ = test(model,test_loader,device)
+    test_acc[run], _ = test(model,test_loader,device,num_classes)
     print('==Test Acc: {:.4f}'.format(test_acc[run]))
 
 print('==Mean Test Acc: {:.4f}'.format(np.mean(test_acc)))
