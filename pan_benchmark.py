@@ -873,14 +873,13 @@ num_edge = num_edge*1.0/num_graph
 num_node = num_node*1.0/num_graph
 
 # generate training, validation and test data sets
-num_training = int(num_graph*0.8)
-num_val = int(num_graph*0.1)
-num_test = num_graph - (num_training+num_val)
+num_training = int(num_graph*0.9)
+num_test = num_graph - num_training
 
 ## train model
 for run in range(runs):
 
-    training_set, val_set, test_set = random_split(dataset, [num_training,num_val,num_test])
+    training_set, test_set = random_split(dataset, [num_training,num_test])
     # resolve data bias
     if is_no_bias_training == 1:
         print('use no bias training')
@@ -891,10 +890,12 @@ for run in range(runs):
                     no_bias_training_set.append(ts)
             else:
                 no_bias_training_set.append(ts)
-        no_bias_training_set = torch.utils.data.Subset(no_bias_training_set, list(range(0, len(no_bias_training_set))))
     else:
         print('use original training')
-        no_bias_training_set = training_set
+        for ts in training_set:
+            no_bias_training_set.append(ts)
+
+    no_bias_training_set, val_set = random_split(no_bias_training_set, [int(len(no_bias_training_set)*0.89), len(no_bias_training_set) - int(len(no_bias_training_set)*0.89)])
 
     # train label
     traing_labels = {}
@@ -960,15 +961,11 @@ for run in range(runs):
         val_acc[run,epoch] = val_acc_1
         # print('Val Run: {:02d}, Epoch: {:03d}, Val loss: {:.4f}, Val acc: {:.4f}'.format(run+1,epoch+1,val_loss[run,epoch],val_acc[run,epoch]))
 
-        # test
-        test_a, test_l = test(model,test_loader,device)
-
-        print('Run: {:02d}, Epoch: {:03d}, Train loss: {:.4f}, Train acc: {:.4f}, Val acc: {:.4f}, Test acc: {:.4f}'.format(run + 1,
-                                                                                                                            epoch + 1,
-                                                                                                                            test_l,
-                                                                                                                            test_a,
-                                                                                                                            val_acc_1,
-                                                                                                                            test_a))
+        print('Run: {:02d}, Epoch: {:03d}, Train loss: {:.4f}, Train acc: {:.4f}, Val acc: {:.4f}'.format(run + 1,
+                                                                                                          epoch + 1,
+                                                                                                          train_l,
+                                                                                                          train_a,
+                                                                                                          val_acc_1))
 
         if val_loss_1 < min_loss[run]:
             # save the model and reuse later in test
