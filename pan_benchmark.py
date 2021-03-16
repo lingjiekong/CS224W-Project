@@ -813,6 +813,10 @@ parser.add_option("--nhid", type=np.int,
 parser.add_option("--epochs", type=np.int,
                   dest="epochs", default=100,
                   help="number of epochs each run")
+parser.add_option("--is_no_bias_training", type=np.int,
+                  dest="is_no_bias_training", default=1,
+                  help="no bias training")
+
 options, argss = parser.parse_args()
 datasetname = options.dataset_name
 phi = options.phi
@@ -824,6 +828,7 @@ weight_decay = options.weight_decay
 pool_ratio = options.pool_ratio
 nhid = options.nhid
 epochs = options.epochs
+is_no_bias_training = options.is_no_bias_training
 
 train_loss = np.zeros((runs,epochs),dtype=np.float)
 val_loss = np.zeros((runs,epochs),dtype=np.float)
@@ -876,12 +881,44 @@ num_test = num_graph - (num_training+num_val)
 for run in range(runs):
 
     training_set, val_set, test_set = random_split(dataset, [num_training,num_val,num_test])
-    train_loader = DataLoader(training_set, batch_size=batch_size, shuffle=True)
+    # resolve data bias
+    if is_no_bias_training == 1:
+        print('use no bias training')
+        no_bias_training_set = []
+        for ts in training_set:
+            if ts.y.item() == 1:
+                for _ in range(20):
+                    no_bias_training_set.append(ts)
+            else:
+                no_bias_training_set.append(ts)
+        no_bias_training_set = torch.utils.data.Subset(no_bias_training_set, list(range(0, len(no_bias_training_set))))
+    else:
+        print('use original training')
+        no_bias_training_set = training_set
+
+    # train label
+    traing_labels = {}
+    for tf in no_bias_training_set:
+        traing_labels[tf.y.item()] = traing_labels.get(tf.y.item(), 0) + 1
+    # eval label
+    val_labels = {}
+    for vs in val_set:
+        val_labels[vs.y.item()] = val_labels.get(vs.y.item(), 0) + 1
+
+    # test label
+    test_labels = {}
+    for ts in test_set:
+        test_labels[ts.y.item()] = test_labels.get(ts.y.item(), 0) + 1
+
+    train_loader = DataLoader(no_bias_training_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 
     print('***** PAN for {}, phi {} *****'.format(datasetname,phi))
-    print('#training data: {}, #test data: {}'.format(num_training,num_test))
+    print('traing_labels: {}'.format(traing_labels))
+    print('val_labels: {}'.format(val_labels))
+    print('test_labels: {}'.format(test_labels))
+    print('#training data: {}, #test data: {}'.format(len(no_bias_training_set),len(test_set)))
     print('Mean #nodes: {:.1f}, mean #edges: {:.1f}'.format(num_node,num_edge))
     print('Network architectur: PC-PA')
     print('filter_size: {:d}, pool_ratio: {:.2f}, learning rate: {:.2e}, weight decay: {:.2e}, nhid: {:d}'.format(filter_size,pool_ratio,learning_rate,weight_decay,nhid))
