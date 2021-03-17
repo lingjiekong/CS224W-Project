@@ -306,8 +306,8 @@ class PAN(torch.nn.Module):
         edge_mask_list = None
 
         x = self.atom_encoder(x)
-        edge_emb = self.edge_encoder(edge_attr)
-        x = self.conv1(x, edge_index, edge_attr)
+        edge_emb = None
+        x = self.conv1(x, edge_index, edge_emb=edge_emb)
         x, edge_index, _, batch, perm, score_perm = self.pool1(x, edge_index, batch=batch)
         perm_list.append(perm)
 
