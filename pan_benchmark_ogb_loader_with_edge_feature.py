@@ -36,6 +36,9 @@ class PANConv(MessagePassing):
     def __init__(self, in_channels, out_channels, filter_size=4, panconv_filter_weight=None):
         super(PANConv, self).__init__(aggr='add')  # "Add" aggregation.
         self.lin = torch.nn.Linear(in_channels, out_channels)
+        self.edge_lin1 = torch.nn.Linear(out_channels, out_channels)
+        self.relu = torch.nn.ReLU()
+        self.edge_lin2 = torch.nn.Linear(out_channels, 1)
         self.filter_size = filter_size
         if panconv_filter_weight is None:
             self.panconv_filter_weight = torch.nn.Parameter(0.5 * torch.ones(filter_size), requires_grad=True)
@@ -79,11 +82,15 @@ class PANConv(MessagePassing):
         return aggr_out
 
     def panentropy_sparse(self, edge_index, edge_emb, num_nodes, AFTERDROP, edge_mask_list):
-
         if edge_emb is None:
             edge_value = torch.ones(edge_index.size(1), device=edge_index.device)
         else:
-            edge_value = edge_emb
+            edge_value = self.edge_lin1(edge_emb.type(torch.float))
+            edge_value = self.relu(edge_value)
+            edge_value = self.edge_lin2(edge_value)
+
+            edge_value = torch.sigmoid(edge_value).squeeze()
+            edge_value += 1 - torch.mean(edge_value)
         edge_index, edge_value = coalesce(edge_index, edge_value, num_nodes, num_nodes)
 
         # iteratively add weighted matrix power
@@ -306,7 +313,7 @@ class PAN(torch.nn.Module):
         edge_mask_list = None
 
         x = self.atom_encoder(x)
-        edge_emb = None
+        edge_emb = self.edge_encoder(edge_attr)
         x = self.conv1(x, edge_index, edge_emb=edge_emb)
         x, edge_index, _, batch, perm, score_perm = self.pool1(x, edge_index, batch=batch)
         perm_list.append(perm)
