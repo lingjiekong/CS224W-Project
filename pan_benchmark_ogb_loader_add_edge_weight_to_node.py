@@ -29,6 +29,8 @@ import time
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 from ogb.graphproppred.mol_encoder import AtomEncoder,BondEncoder
 from sklearn.metrics import roc_auc_score
+import datetime
+
 
 ### define convolution
 
@@ -50,14 +52,8 @@ class PANConv(MessagePassing):
         # edge_index has shape [2, E]
         num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
-        if edge_emb is not None:
-            nodes1 = edge_index[0]
-            nodes2 = edge_index[1]
-            x[nodes1] += edge_emb
-            x[nodes2] += edge_emb
-
         # Step 1: Path integral
-        edge_index, edge_weight = self.panentropy_sparse(edge_index, edge_emb, num_nodes, AFTERDROP, edge_mask_list)
+        edge_index, edge_weight = self.panentropy_sparse(edge_index, num_nodes, AFTERDROP, edge_mask_list)
 
         # Step 2: Linearly transform node feature matrix.
         x = self.lin(x)
@@ -84,7 +80,7 @@ class PANConv(MessagePassing):
         # Step 5: Return new node embeddings.
         return aggr_out
 
-    def panentropy_sparse(self, edge_index, edge_emb, num_nodes, AFTERDROP, edge_mask_list):
+    def panentropy_sparse(self, edge_index, num_nodes, AFTERDROP, edge_mask_list):
 
         edge_value = torch.ones(edge_index.size(1), device=edge_index.device)
         edge_index, edge_value = coalesce(edge_index, edge_value, num_nodes, num_nodes)
@@ -279,13 +275,32 @@ class PANDropout(torch.nn.Module):
         return True, edge_mask_list
 
 
+class PANEdgeConv(MessagePassing):
+    def __init__(self, emb_dim):
+        super(PANEdgeConv, self).__init__(aggr = "add")
+        # self.mlp = torch.nn.Sequential(torch.nn.Linear(2*emb_dim, 2*emb_dim), torch.nn.BatchNorm1d(2*emb_dim), torch.nn.ReLU(), torch.nn.Linear(2*emb_dim, emb_dim))
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(emb_dim, 2*emb_dim), torch.nn.BatchNorm1d(2*emb_dim), torch.nn.ReLU(), torch.nn.Linear(2*emb_dim, emb_dim))
+        self.eps = torch.nn.Parameter(torch.Tensor([0]))
+        self.atom_encoder = AtomEncoder(emb_dim = emb_dim)
+        self.bond_encoder = BondEncoder(emb_dim = emb_dim)
+    def forward(self, x, edge_index, edge_attr):
+        x = self.atom_encoder(x)
+        edge_embedding = self.bond_encoder(edge_attr)
+        # out = self.mlp(torch.cat((x, self.propagate(edge_index, x=x, edge_attr=edge_embedding)), dim=-1))
+        out = self.mlp((1 + self.eps) *x + self.propagate(edge_index, x=x, edge_attr=edge_embedding))
+        return out
+    def message(self, x_j, edge_attr):
+        return edge_attr
+    def update(self, aggr_out):
+        return aggr_out
+
+
 ### build model
 
 class PAN(torch.nn.Module):
     def __init__(self, num_node_features, num_classes, nhid, ratio, filter_size, pos_weight=1):
         super(PAN, self).__init__()
-        self.atom_encoder = AtomEncoder(nhid)
-        self.edge_encoder = BondEncoder(nhid)
+        self.panedgeconv = PANEdgeConv(nhid)
         self.conv1 = PANConv(nhid, nhid, filter_size)
         self.pool1 = PANPooling(nhid, filter_size=filter_size)
         #self.drop1 = PANDropout()
@@ -308,9 +323,8 @@ class PAN(torch.nn.Module):
         perm_list = list()
         edge_mask_list = None
 
-        x = self.atom_encoder(x)
-        edge_emb = self.edge_encoder(edge_attr)
-        x = self.conv1(x, edge_index, edge_emb=edge_emb)
+        x = self.panedgeconv(x, edge_index, edge_attr)
+        x = self.conv1(x, edge_index)
         x, edge_index, _, batch, perm, score_perm = self.pool1(x, edge_index, batch=batch)
         perm_list.append(perm)
 
@@ -362,24 +376,6 @@ def train(model, opt, loader, device):
             if 'panpool_filter_weight' in name:
                 param.data = param.data.clamp(0, 1)
     return loss_all / len(loader.dataset)
-
-
-def test(model, loader, device, evaluator):
-    model.eval()
-
-    total_score = 0
-    count_batch = 0
-    for batch in loader:
-        batch.to(device)
-        pred,_ = model(batch)
-        pred = torch.sigmoid(pred)
-        input_dict = {"y_true": batch.y.cpu().detach().numpy(), "y_pred": pred.cpu().detach().numpy()}
-        total_score += evaluator.eval(input_dict)["rocauc"]
-        count_batch += 1
-    
-    score = total_score/count_batch
-
-    return score
 
 def eval(model, loader, device, evaluator):
     model.eval()
@@ -452,26 +448,28 @@ pos_weight = options.pos_weight
 train_loss = np.zeros((runs,epochs),dtype=np.float)
 val_acc = np.zeros((runs,epochs),dtype=np.float)
 test_acc = np.zeros(runs,dtype=np.float)
+train_acc = np.zeros(runs,dtype=np.float)
+eval_acc = np.zeros(runs,dtype=np.float)
 max_score = 0.
 
 # dataset
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-dataset = PygGraphPropPredDataset(name=datasetname, root='dataset/')
-split_idx = dataset.get_idx_split()
-train_loader = DataLoader(dataset[split_idx["train"]], batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(dataset[split_idx["valid"]], batch_size=batch_size, shuffle=False)
-test_loader = DataLoader(dataset[split_idx["test"]], batch_size=batch_size, shuffle=False)
-evaluator = Evaluator(name=datasetname)
-
-num_graph = len(dataset)
-
-## train model
-    
-model = PAN(dataset.num_node_features, dataset.num_classes, nhid=nhid, ratio=pool_ratio, filter_size=filter_size, pos_weight=pos_weight).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 for run in range(runs):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    dataset = PygGraphPropPredDataset(name=datasetname, root='dataset/')
+    split_idx = dataset.get_idx_split()
+    train_loader = DataLoader(dataset[split_idx["train"]], batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(dataset[split_idx["valid"]], batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(dataset[split_idx["test"]], batch_size=batch_size, shuffle=False)
+    evaluator = Evaluator(name=datasetname)
+
+    num_graph = len(dataset)
+
+    ## train model
+    t1 = datetime.datetime.fromtimestamp(time.time())
+    model = PAN(dataset.num_node_features, dataset.num_classes, nhid=nhid, ratio=pool_ratio, filter_size=filter_size, pos_weight=pos_weight).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     for epoch in range(epochs):
         # training
         loss = train(model, optimizer, train_loader, device)
@@ -493,19 +491,22 @@ for run in range(runs):
             max_score = val_acc_1
 
     # test
-    model.load_state_dict(torch.load('latest.pth'))
+    model.load_state_dict(torch.load('latest.pth'), strict=False)
+    train_acc[run] = eval(model, train_loader, device, evaluator)
+    eval_acc[run] = eval(model, val_loader, device, evaluator)
     test_acc[run] = eval(model, test_loader, device, evaluator)
+    print('==Train Acc: {:.4f}'.format(train_acc[run]))
     print('==Test Acc: {:.4f}'.format(test_acc[run]))
 
+    sv_prefix = datasetname + '_time' + str(t1)
+    sv_results = sv_prefix + '.mat'
+    sv_model = sv_prefix + '.pth'
+    mdict = options.__dict__
+    mdict.update({'test_acc':test_acc,
+                  'val_acc':val_acc,
+                  'eval_acc':eval_acc,
+                  'train_loss':train_loss})
+    sio.savemat(sv_results,mdict=mdict)
+    torch.save(model.state_dict(), sv_model)
 print('==Mean Test Acc: {:.4f}'.format(np.mean(test_acc)))
-
-t1 = time.time()
-sv = datasetname + '_pcpa_runs' + str(runs) + '_time' + str(t1) + '.mat'
-sio.savemat(sv,mdict={'test_acc':test_acc,'val_acc':val_acc,'train_loss':train_loss,'filter_size':filter_size,'learning_rate':learning_rate,'weight_decay':weight_decay,'nhid':nhid,'batch_size':batch_size,'epochs':epochs})
-
-
-
-
-
-
 
