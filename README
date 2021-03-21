@@ -1,0 +1,17 @@
+In order to run train and eval on any ogb heterogeneous graph dataset, you can either 
+
+`python pan_launch.py --dataset_name ogbg-molhiv --runs 5 --epochs 200 --batch_size 64 --learning_rate 0.0005 --pos_weight 10.0`
+
+or 
+
+use our shell script 
+
+`pan_launch.sh`
+
+Our code folk from the conventional pan implementation at https://github.com/YuGuangWang/PAN. Besides extending the original implementation which only applicable to node feature only, we also completely refactor code into factory pattern.
+
+- pan_factory folder contains specific implementation for overall PAN in pan.py as well as each PAN building blocks such as pen_conv.py, pan_pooling.py, pan_lump.py and pan_dropout.py.
+- pan_launch.py is the entry point of our code
+- pan_launch.launch is the shell script to help quickly launch our code
+- utils.py covers free helper method to train and eval our model
+- parse_mat_file.py is used to parse the .mat file to calculate the mean and standard deviation of eval, and test ROC-AUC score.
